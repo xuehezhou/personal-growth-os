@@ -6,7 +6,8 @@ from datetime import time
 
 import streamlit as st
 
-from database import get_setting, save_setting
+from data_safety import DatabaseSafetyError, create_database_backup, inspect_database
+from database import CURRENT_SCHEMA_VERSION, DB_PATH, get_schema_version, get_setting, save_setting
 from pages.common import page_header
 
 
@@ -44,3 +45,17 @@ def render() -> None:
         save_setting("review_time", review_time.strftime("%H:%M"))
         st.success("提醒设置已保存。")
 
+    st.divider()
+    st.subheader("数据安全")
+    try:
+        health = inspect_database(DB_PATH)
+        columns = st.columns(3)
+        columns[0].metric("数据库版本", f"v{get_schema_version(DB_PATH)}")
+        columns[1].metric("当前程序版本", f"v{CURRENT_SCHEMA_VERSION}")
+        columns[2].metric("完整性", "正常" if health.ok else "需要检查")
+        st.caption("备份保存在项目的 backups 目录；该目录不会提交到 Git。")
+        if st.button("创建数据库备份", type="primary"):
+            backup_path = create_database_backup(DB_PATH)
+            st.success(f"备份已创建并通过完整性检查：{backup_path.name}")
+    except DatabaseSafetyError as error:
+        st.error(str(error))

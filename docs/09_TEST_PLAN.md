@@ -10,8 +10,11 @@
 |---|---|---|
 | 数据与 service | `tests/test_core.py` | 默认初始化、每日任务幂等物化、任务状态、容量、习惯连续、阅读、规划、提醒 |
 | 页面烟雾 | `tests/test_ui.py` | 8 个当前页面可以通过 Streamlit AppTest 启动 |
+| 数据安全 | `tests/test_data_safety.py` | 新库版本、旧库迁移前备份、数据保留、手工备份、损坏库拒绝迁移 |
 
 当前自动化测试不是完整 E2E：它不能替代真实浏览器中的布局、表单交互和数据恢复检查。
+
+当前共 13 项自动化测试。`tests/conftest.py` 强制 UI 测试使用 `tests/runtime/app-test.db`，避免测试写入真实数据库。
 
 ## 3. 本地执行
 
@@ -57,6 +60,8 @@ python -m pytest -q -p no:cacheprovider --basetemp tests/runtime
 
 分别执行初始化/升级两次，验证版本记录、行数、外键、唯一约束和应用启动。升级失败后检查原副本可恢复。严禁在唯一的用户数据库上首次试迁移。
 
+V0.2 已自动覆盖空库、无版本记录的旧库、已是当前版本的数据库和损坏数据库；真实恢复演练仍需用户在明确确认后执行。
+
 ## 7. 未来功能验收
 
 ### Daily Journal
@@ -96,4 +101,3 @@ python -m pytest -q -p no:cacheprovider --basetemp tests/runtime
 - 没有未说明的数据破坏风险；
 - README、需求状态、数据库设计和 CHANGELOG 已同步；
 - 未验证项明确列出，不能声称完成。
-

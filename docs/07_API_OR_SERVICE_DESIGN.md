@@ -16,6 +16,14 @@
 
 约束：页面和 service 不应自行创建未启用外键的连接；写操作发生 SQLite 异常时必须向上抛出并由 UI 展示失败。
 
+`data_safety.py` 提供：
+
+- `inspect_database`：只读执行完整性、外键和表检查；
+- `create_database_backup`：使用 SQLite Backup API 创建并复查一致性备份；
+- `default_backup_directory`：为真实库和测试库选择隔离备份目录。
+
+`database.py` 的 `init_database` 只在发现待执行迁移时调用自动备份；普通启动不会重复生成备份。
+
 ## 3. 当前 Service 契约
 
 ### tasks.py
@@ -123,4 +131,3 @@ archive_goal(goal_id, reason) -> None
 ## 7. 如果未来增加 HTTP API
 
 只有明确出现多端客户端、第三方集成或远程同步时再设计。届时 API 应调用现有 service，而不是复制业务规则；还需补齐认证、授权、并发冲突、隐私和版本契约。
-

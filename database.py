@@ -2,15 +2,38 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
+
+from data_safety import DatabaseSafetyError, create_database_backup, inspect_database
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "data" / "growth.db"
+DB_PATH = Path(
+    os.environ.get("GROWTH_OS_DB_PATH", str(BASE_DIR / "data" / "growth.db"))
+).resolve()
+
+
+class DatabaseMigrationError(RuntimeError):
+    """数据库版本异常或迁移定义不一致。"""
+
+
+@dataclass(frozen=True)
+class Migration:
+    version: int
+    name: str
+    checksum: str
+    apply: Callable[[sqlite3.Connection], None]
+
+
+def _migration_checksum(identity: str) -> str:
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 @contextmanager
@@ -24,7 +47,7 @@ def get_connection(db_path: Path | str = DB_PATH) -> Iterator[sqlite3.Connection
     try:
         yield connection
         connection.commit()
-    except sqlite3.Error:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -32,10 +55,45 @@ def get_connection(db_path: Path | str = DB_PATH) -> Iterator[sqlite3.Connection
 
 
 def init_database(db_path: Path | str = DB_PATH) -> None:
-    """幂等创建数据库，并在首次运行时写入最少默认数据。"""
-    with get_connection(db_path) as connection:
-        connection.executescript(
-            """
+    """创建新库或迁移旧库；只有真正的新库才写入初始化数据。"""
+    path = Path(db_path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    is_new_database = not path.exists() or path.stat().st_size == 0
+
+    if not is_new_database:
+        health = inspect_database(path)
+        if not health.ok:
+            raise DatabaseSafetyError("数据库完整性检查未通过，已停止自动迁移。")
+        pending = pending_migration_versions(path)
+        if pending:
+            current = get_schema_version(path)
+            create_database_backup(
+                path,
+                label=f"pre-migration-v{current}-to-v{CURRENT_SCHEMA_VERSION}",
+            )
+
+    with get_connection(path) as connection:
+        _create_schema(connection)
+        _apply_migrations(connection)
+        if is_new_database:
+            _seed_defaults(connection)
+
+    health = inspect_database(path)
+    if not health.ok:
+        raise DatabaseSafetyError("数据库初始化后完整性检查未通过。")
+
+
+def _create_schema(connection: sqlite3.Connection) -> None:
+    """幂等保证当前版本所需的表和索引存在。"""
+    connection.executescript(
+        """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -186,14 +244,16 @@ def init_database(db_path: Path | str = DB_PATH) -> None:
                 free_text TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL
             );
-            """
-        )
-        _ensure_schema_upgrades(connection)
-        _seed_defaults(connection)
+        """
+    )
 
 
-def _ensure_schema_upgrades(connection: sqlite3.Connection) -> None:
-    """兼容已存在的 V1 数据库，只做安全的新增列迁移。"""
+def _migration_001_baseline(connection: sqlite3.Connection) -> None:
+    """记录现有 V1 基线；实际表由 _create_schema 幂等保证。"""
+
+
+def _migration_002_task_recurrence(connection: sqlite3.Connection) -> None:
+    """兼容早期任务表，只新增每日任务关联和容量口径。"""
     columns = {
         row["name"] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
     }
@@ -212,6 +272,89 @@ def _ensure_schema_upgrades(connection: sqlite3.Connection) -> None:
         WHERE recurring_template_id IS NOT NULL
         """
     )
+
+
+MIGRATIONS = (
+    Migration(
+        1,
+        "baseline_v1_schema",
+        _migration_checksum("001:baseline_v1_schema"),
+        _migration_001_baseline,
+    ),
+    Migration(
+        2,
+        "task_recurrence_and_capacity",
+        _migration_checksum("002:add-task-recurrence-capacity-columns-and-unique-index"),
+        _migration_002_task_recurrence,
+    ),
+)
+CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
+
+
+def _read_migration_rows(db_path: Path | str) -> list[tuple[int, str, str]]:
+    path = Path(db_path).resolve()
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    try:
+        with sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True) as connection:
+            table_exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+            ).fetchone()
+            if not table_exists:
+                return []
+            return [
+                (int(row[0]), str(row[1]), str(row[2]))
+                for row in connection.execute(
+                    "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+                ).fetchall()
+            ]
+    except sqlite3.Error as error:
+        raise DatabaseMigrationError(f"无法读取数据库版本：{path}") from error
+
+
+def get_schema_version(db_path: Path | str = DB_PATH) -> int:
+    rows = _read_migration_rows(db_path)
+    return max((row[0] for row in rows), default=0)
+
+
+def pending_migration_versions(db_path: Path | str = DB_PATH) -> list[int]:
+    applied = {row[0] for row in _read_migration_rows(db_path)}
+    return [migration.version for migration in MIGRATIONS if migration.version not in applied]
+
+
+def _apply_migrations(connection: sqlite3.Connection) -> None:
+    rows = {
+        int(row["version"]): (str(row["name"]), str(row["checksum"]))
+        for row in connection.execute(
+            "SELECT version, name, checksum FROM schema_migrations"
+        ).fetchall()
+    }
+    if rows and max(rows) > CURRENT_SCHEMA_VERSION:
+        raise DatabaseMigrationError(
+            "数据库版本高于当前程序支持版本，请使用更新的程序打开。"
+        )
+
+    for migration in MIGRATIONS:
+        recorded = rows.get(migration.version)
+        if recorded:
+            if recorded != (migration.name, migration.checksum):
+                raise DatabaseMigrationError(
+                    f"迁移记录 {migration.version} 与程序定义不一致，已停止启动。"
+                )
+            continue
+        migration.apply(connection)
+        connection.execute(
+            """
+            INSERT INTO schema_migrations (version, name, checksum, applied_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                migration.version,
+                migration.name,
+                migration.checksum,
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
 
 
 def _seed_defaults(connection: sqlite3.Connection) -> None:

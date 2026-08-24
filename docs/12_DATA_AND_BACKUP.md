@@ -20,7 +20,9 @@ data/growth.db
 
 ## 3. Windows 手工备份
 
-先在运行 Streamlit 的终端按 `Ctrl+C` 停止应用，然后在项目目录执行：
+推荐方式是在“设置 → 数据安全”点击“创建数据库备份”。系统会使用 SQLite Backup API 创建一致性副本，并自动执行完整性检查；应用运行时也可以安全使用。
+
+如需完全手工复制，先在运行 Streamlit 的终端按 `Ctrl+C` 停止应用，然后在项目目录执行：
 
 ```powershell
 New-Item -ItemType Directory -Force -Path .\backups
@@ -61,7 +63,7 @@ Copy-Item -LiteralPath .\backups\growth-2026-08-24.db -Destination .\data\growth
 
 ## 6. 代码升级与数据库迁移
 
-当前应用只有轻量兼容升级，没有完整迁移版本管理。每次数据库结构变更应遵守：
+当前应用使用 `schema_migrations` 记录版本。有待执行迁移时，会先检查原数据库并在 `backups/` 自动创建迁移前备份。每次数据库结构变更仍应遵守：
 
 ```text
 备份真实数据库
@@ -87,4 +89,3 @@ Copy-Item -LiteralPath .\backups\growth-2026-08-24.db -Destination .\data\growth
 - 检查磁盘空间、占用进程和文件权限；
 - 在副本上执行 `PRAGMA integrity_check`；
 - 只有确认备份有效后再恢复。
-

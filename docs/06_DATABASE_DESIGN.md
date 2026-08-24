@@ -7,6 +7,7 @@
 - 初始化入口：`database.py::init_database`
 - 时间保存：ISO 文本；日期通常为 `YYYY-MM-DD`
 - 外键：每个连接执行 `PRAGMA foreign_keys = ON`
+- 当前 Schema 版本：v2
 
 这是用户真实数据文件。开发和测试不得用生产数据做清空、重建或破坏性实验。
 
@@ -22,9 +23,18 @@ erDiagram
     BOOKS ||--o{ READING_LOGS : has
 ```
 
-`settings`、`directions`、`daily_reviews` 当前是独立表。
+`settings`、`directions`、`daily_reviews`、`schema_migrations` 当前是独立表。
 
 ## 3. 当前表与字段
+
+### schema_migrations
+
+| 字段 | 类型/约束 | 用途 |
+|---|---|---|
+| `version` | INTEGER PK | 迁移版本号 |
+| `name` | TEXT NOT NULL | 迁移名称 |
+| `checksum` | TEXT NOT NULL | 防止已经执行的迁移被静默改写 |
+| `applied_at` | TEXT NOT NULL | 实际执行时间 |
 
 ### settings
 
@@ -113,9 +123,9 @@ erDiagram
 
 ## 5. 当前迁移机制
 
-`_ensure_schema_upgrades` 会检查旧数据库是否缺少 `tasks.recurring_template_id` 和 `tasks.counts_toward_capacity`，然后补列并建立唯一索引。它能兼容少量旧版本，但不具备版本号、迁移历史和系统化失败恢复。
+`init_database` 先判断是新数据库还是已有数据库。已有数据库如存在待执行迁移，会先运行完整性与外键检查，再通过 SQLite Backup API 创建迁移前备份，之后按版本顺序执行迁移并写入 `schema_migrations`。重复启动不会重复执行或重复备份。
 
-下一次 Schema 变更前应先引入 `schema_migrations` 表或轻量迁移脚本，并用旧数据库副本验证升级。
+当前 v1 记录现有基线，v2 兼容补齐 `tasks.recurring_template_id`、`tasks.counts_toward_capacity` 和每日任务唯一索引。若数据库版本高于程序支持版本，或迁移校验值不匹配，程序会停止启动，不冒险写入。
 
 ## 6. 推荐未来表（尚未实现）
 
@@ -125,7 +135,6 @@ erDiagram
 | `quick_captures` | 未分类收件箱 | id, content, created_at, category, status, converted_type, converted_id, processed_at |
 | `goal_versions` | 目标变更历史 | id, goal_id, version_no, snapshot_json, change_reason, created_at |
 | `goal_progress_snapshots` | 周/月进度快照 | id, goal_id, snapshot_date, progress, note |
-| `schema_migrations` | 数据库版本记录 | version, applied_at, checksum |
 
 新增表时不得把现有 `daily_reviews` 强行改名覆盖；应设计兼容迁移和数据映射。
 

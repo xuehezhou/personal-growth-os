@@ -69,6 +69,6 @@ with st.sidebar:
     st.caption("把长期方向，变成今天的行动。")
     selected_page = st.radio("导航", list(PAGES), label_visibility="collapsed")
     st.divider()
-    st.caption("V1 · 本地单用户 · 数据保存在 SQLite")
+    st.caption("V0.2 · 本地单用户 · 数据保存在 SQLite")
 
 PAGES[selected_page]()

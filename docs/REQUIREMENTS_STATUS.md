@@ -32,7 +32,8 @@
 | Dashboard | 7/30 天任务统计 | 已实现 | `pages/dashboard.py`、`services/stats.py` | ✅ 部分 |
 | Dashboard | 合并阅读/习惯/日记数据 | 未实现 | 当前只聚合任务 | ❌ |
 | Data | SQLite 持久化 | 已实现 | `data/growth.db` | ✅ |
-| Data | 一键备份/恢复 | 未实现 | 仅 README 手工说明 | ❌ |
+| Data | Schema 版本与迁移前备份 | 已实现 | `database.py`、`schema_migrations`、`data_safety.py` | ✅ |
+| Data | 设置页手工备份 | 已实现 | `pages/settings.py`、`backups/` | ✅ |
+| Data | 一键恢复 | 未实现 | 当前按恢复文档手工执行 | ❌ |
 | Search | 全局搜索 | 未实现 | 无 | ❌ |
 | AI | AI 总结/计划/行为模式 | 未实现 | 当前为确定性规则 | ❌ |
-

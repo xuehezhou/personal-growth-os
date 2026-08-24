@@ -12,6 +12,7 @@ Personal Growth OS 是一个本地运行的个人成长管理应用，把目标�
 - 复盘：一日一条结构化复盘；
 - 统计：任务完成、分类投入和学习连续天数；
 - 设置与提醒：容量、提醒时间和应用页面内提醒。
+- 数据安全：版本化数据库迁移、升级前自动备份、完整性检查和手工备份。
 
 当前还没有 Quick Capture 收件箱、完整 Daily Journal 历史、Goal History、系统通知或云同步。详细状态见 [需求实现状态](docs/REQUIREMENTS_STATUS.md)。
 
@@ -31,9 +32,11 @@ personal-growth-os/
 ├─ pages/              # 8 个当前页面
 ├─ services/           # 任务、规划、统计、提醒等业务规则
 ├─ database.py         # SQLite Schema、事务和初始化
+├─ data_safety.py      # 数据库检查与一致性备份
 ├─ models.py           # 状态常量与容量数据模型
 ├─ data/growth.db      # 本地真实数据，不提交 Git
 ├─ tests/              # 核心与页面烟雾测试
+├─ backups/            # 本地备份，不提交 Git
 └─ docs/               # 产品和工程文档基线
 ```
 
@@ -42,7 +45,7 @@ personal-growth-os/
 ## 安装与启动（Windows PowerShell）
 
 ```powershell
-cd "D:\All chatgtp\plan Agent\personal-growth-os"
+cd "D:\All chatgtp\plan Agent\Study-diary"
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m streamlit run app.py
@@ -101,9 +104,8 @@ python -m pytest -q -p no:cacheprovider --basetemp tests/runtime
 
 ## 当前版本定位
 
-当前是可本地运行的 V1 基础闭环：核心功能已存在并有自动化测试，但文档审计中列出的数据口径、迁移体系和部分管理能力仍需增量完善。路线图不使用虚构发布日期，按可靠性、捕获与日记、目标历史、洞察四个阶段演进。
+当前是 V0.2 数据安全基线：核心日常功能可以运行，数据库已具备版本记录、迁移前自动备份和完整性检查。V1.0 只有在真实连续使用至少 7 天且没有关键数据丢失后才成立。
 
 ## 遇到问题时提供什么
 
 请提供完整命令、从 `Traceback` 开始的完整报错、`python --version`、操作页面和预期结果。不要发送密码、Token、Cookie、私人日记内容或真实数据库。
-

@@ -35,10 +35,12 @@
 ```text
 app.py                    应用入口、导航、样式、数据库初始化
 database.py               Schema、默认数据、连接与通用查询
+data_safety.py            SQLite 完整性检查与一致性备份
 models.py                 分类、状态、时间段和容量常量
 pages/                    8 个用户页面
 services/                 任务、计划、统计、提醒、习惯、阅读规则
 data/growth.db            用户真实数据
+backups/                  迁移前与手工备份，不提交 Git
 tests/                    核心业务与全页面冒烟测试
 .streamlit/config.toml    本地监听和主题
 docs/                     产品、技术、使用和决策文档
@@ -164,4 +166,3 @@ data/growth.db
 - 看代码结构：[05_ARCHITECTURE.md](05_ARCHITECTURE.md)
 - 看数据表：[06_DATABASE_DESIGN.md](06_DATABASE_DESIGN.md)
 - 每天怎么用：[11_USER_GUIDE.md](11_USER_GUIDE.md)
-
