@@ -1,0 +1,12 @@
+[client]
+showSidebarNavigation = false
+
+[server]
+address = "127.0.0.1"
+
+[theme]
+primaryColor = "#2D6A4F"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#17231D"
+font = "sans-serif"
