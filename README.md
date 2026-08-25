@@ -44,8 +44,9 @@ personal-growth-os/
 
 ## 安装与启动（Windows PowerShell）
 
+先在资源管理器中进入项目文件夹，在地址栏输入 `powershell` 并回车。确认当前目录中能看到 `app.py` 后运行：
+
 ```powershell
-cd "D:\All chatgtp\plan Agent\Study-diary"
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m streamlit run app.py
