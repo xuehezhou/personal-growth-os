@@ -15,22 +15,21 @@
 | Goals | 编辑方向字段 | 已实现 | `pages/goals.py`、`directions` | ✅ 冒烟 |
 | Goals | 新增/编辑/完成/暂停 | 已实现 | `pages/goals.py`、`goals` | ✅ 冒烟 |
 | Goals | 归档 | 未实现 | 无归档状态/UI | ❌ |
-| Goal History | 保存方向和目标历史版本 | 未实现 | 无版本表 | ❌ |
+| Goal History | 保存当天方向快照 | 已实现 | `goal_snapshots`、`services/journal.py` | ✅ |
 | Daily Review | 按日期保存复盘 | 已实现 | `pages/review.py`、`daily_reviews` | ✅ 冒烟 |
-| Daily Journal | 一天一页完整生活记录 | 部分实现 | `daily_reviews.free_text` 是基础 | ❌ |
-| Journal History | 浏览过去每天 | 部分实现 | 日期选择可读取，但无历史列表/聚合页 | ❌ |
-| Quick Capture | 5–10 秒记录 | 未实现 | 无页面/Service/表 | ❌ |
+| Daily Journal | 一天一页完整生活记录 | 已实现 | `daily_journals`、`pages/today.py` | ✅ |
+| Journal History | 浏览过去每天 | 已实现 | `pages/journal.py`，默认阅读模式 | ✅ 冒烟 |
+| Quick Capture | 5–10 秒记录 | 已实现 | 侧边栏、`quick_notes`、`services/journal.py` | ✅ |
 | Capture Inbox | 编辑/分类/转换 | 未实现 | 无 | ❌ |
 | Books | 初始化分阶段书单 | 已实现 | `database.py`、`books` | ✅ |
 | Books | 当前阅读和进度 | 已实现 | `pages/books.py`、`reading_logs` | ✅ |
-| Books | 新增/删除/调整顺序 | 未实现 | 无 UI/Service | ❌ |
+| Books | 新增/删除/调整当前阅读 | 已实现 | `pages/books.py`、`services/books.py` | ✅ 冒烟 |
 | Habits | 新增与每日打卡 | 已实现 | `pages/habits.py`、`habit_logs` | ✅ 部分 |
 | Habits | 修改/停用/删除 | 未实现 | `active` 字段存在但无 UI | ❌ |
 | Sleep | 可配置睡眠时间 | 已实现 | `pages/settings.py`、`settings` | ✅ 提醒规则 |
 | Reminder | 应用内任务/复盘/睡眠提醒 | 已实现 | `services/reminder.py` | ✅ |
 | Reminder | 应用关闭后提醒 | 未实现 | 无后台进程/系统通知 | ❌ |
-| Dashboard | 7/30 天任务统计 | 已实现 | `pages/dashboard.py`、`services/stats.py` | ✅ 部分 |
-| Dashboard | 合并阅读/习惯/日记数据 | 未实现 | 当前只聚合任务 | ❌ |
+| Light Stats | 最近 7 天日记/阅读/锻炼/任务 | 已实现 | `pages/journal.py`、`services/journal.py` | ✅ |
 | Data | SQLite 持久化 | 已实现 | `data/growth.db` | ✅ |
 | Data | Schema 版本与迁移前备份 | 已实现 | `database.py`、`schema_migrations`、`data_safety.py` | ✅ |
 | Data | 设置页手工备份 | 已实现 | `pages/settings.py`、`backups/` | ✅ |

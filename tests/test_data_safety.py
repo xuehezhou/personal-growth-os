@@ -61,7 +61,7 @@ def test_new_database_records_schema_version_without_backup(tmp_path: Path) -> N
         versions = connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
-        assert versions == [(1,), (2,)]
+        assert versions == [(1,), (2,), (3,), (4,)]
     assert not (tmp_path / "backups").exists()
 
 

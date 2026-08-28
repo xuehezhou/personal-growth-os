@@ -1,189 +1,439 @@
-"""今日首页。"""
+"""一天一页的 Study Diary 主页面。"""
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
+from html import escape
 
 import streamlit as st
 
-from database import fetch_all
-from models import CATEGORIES, PRIORITIES, TIME_SLOTS
-from pages.common import minutes_text, page_header, task_card
-from services.habits import calculate_streak, list_habits, save_habit_log
-from services.planner import assess_capacity, build_today_advice, find_main_task
-from services.reminder import collect_reminders, is_night_closing
-from services.stats import category_minutes, task_summary
+from database import get_setting
+from pages.common import minutes_text
+from services.books import add_reading_log, list_books, reading_minutes_for_day
+from services.directions import get_direction
+from services.habits import list_habits, save_habit_log
+from services.journal import (
+    delete_quick_note,
+    get_journal,
+    list_quick_notes,
+    save_journal,
+    update_quick_note,
+)
 from services.tasks import (
     complete_task,
-    create_daily_task,
     create_task,
+    delete_task,
     list_tasks,
-    postpone_task,
+    update_task,
 )
 
 
-def _quick_task_form() -> None:
-    with st.expander("＋ 安排一个今天的任务", expanded=False):
-        with st.form("today_quick_task", clear_on_submit=True):
-            title = st.text_input("任务名称 *", placeholder="例如：今天去理发")
-            col1, col2, col3 = st.columns(3)
-            category = col1.selectbox("类型", CATEGORIES, index=CATEGORIES.index("个人事务"))
-            priority = col2.selectbox("优先级", PRIORITIES, index=2)
-            time_slot = col3.selectbox("时间段", TIME_SLOTS, index=3)
-            col4, col5, col6 = st.columns(3)
-            start_time = col4.time_input("开始时间", value=None)
-            end_time = col5.time_input("结束时间", value=None)
-            estimated = col6.number_input("预计分钟", min_value=0, value=30, step=5)
-            criteria = st.text_area("验收标准", placeholder="做到什么才算真正完成？")
-            notes = st.text_area("备注")
-            must_today = st.checkbox("必须今天完成")
-            repeat_daily = st.checkbox("每天重复（从今天开始）")
-            exclude_capacity = st.checkbox("不计入白天计划容量（适合睡眠等任务）")
-            submitted = st.form_submit_button("加入今日计划", type="primary")
-        if submitted:
+MOODS = ["😀 很好", "🙂 不错", "😐 一般", "😴 有点累", "😞 不太好"]
+SLOTS = (("上午", "☀️"), ("下午", "🌤"), ("晚上", "🌙"), ("全天", "·"))
+
+
+def _time_value(value: str | None) -> time | None:
+    return datetime.strptime(value, "%H:%M").time() if value else None
+
+
+def _move_to_direction() -> None:
+    st.session_state["main_navigation"] = "🎯 方向"
+
+
+def _header(day: date, journal: dict) -> None:
+    st.markdown(
+        f"""
+        <div class="day-hero">
+          <div class="day-name">{day:%A}</div>
+          <div class="day-date">{day:%Y} · {day:%m} · {day:%d}</div>
+          <div class="day-question">今天想怎样度过？</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    mood_index = MOODS.index(journal["mood"]) if journal["mood"] in MOODS else 2
+    with st.form(f"day_intention_{day.isoformat()}"):
+        mood = st.radio("今日状态", MOODS, index=mood_index, horizontal=True)
+        st.markdown("### Today’s Focus")
+        focus = st.text_input(
+            "今天如果只能完成一件事情，我希望完成什么？",
+            value=journal["focus"],
+            placeholder="只写一件。",
+        )
+        left, right = st.columns(2)
+        second = left.text_input(
+            "另外一件重要的事",
+            value=journal["secondary_focus_1"],
+            placeholder="最多再安排两件",
+        )
+        third = right.text_input(
+            "第三件重要的事",
+            value=journal["secondary_focus_2"],
+            placeholder="留空也很好",
+        )
+        submitted = st.form_submit_button("保存今天的开始", type="primary")
+    if submitted:
+        save_journal(
+            day,
+            {
+                "mood": mood,
+                "focus": focus,
+                "secondary_focus_1": second,
+                "secondary_focus_2": third,
+            },
+        )
+        st.success("今天的状态与重点已保存")
+        st.rerun()
+
+
+def _direction_card() -> None:
+    direction = get_direction()
+    current_goal = escape(direction["current_goal"] or "尚未填写")
+    primary_conflict = escape(direction["primary_conflict"] or "尚未填写")
+    left, right = st.columns([4, 1])
+    with left:
+        st.markdown("## 🎯 此刻最重要的方向")
+        st.markdown(
+            f"""
+            <div class="direction-note">
+              <strong>当前目标</strong><br>{current_goal}<br><br>
+              <strong>当前主要矛盾</strong><br>{primary_conflict}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    right.button(
+        "编辑方向",
+        on_click=_move_to_direction,
+        use_container_width=True,
+        key="today_edit_direction",
+    )
+
+
+def _quick_task_form(day: date) -> None:
+    with st.expander("＋ 今天突然要做的事", expanded=False):
+        with st.form(f"quick_task_{day.isoformat()}", clear_on_submit=True):
+            title = st.text_input("任务名称", placeholder="例如：下午修项目 Bug")
+            left, right = st.columns(2)
+            start = left.time_input("时间（可选）", value=None)
+            slot = right.selectbox("时间段", ["上午", "下午", "晚上", "全天"])
+            notes = st.text_area("备注（可选）", height=80)
+            added = st.form_submit_button("加入今天计划", type="primary")
+        if added:
             try:
-                task_data = {
-                    "title": title,
-                    "category": category,
-                    "priority": priority,
-                    "planned_date": date.today().isoformat(),
-                    "start_time": start_time.strftime("%H:%M") if start_time else None,
-                    "end_time": end_time.strftime("%H:%M") if end_time else None,
-                    "time_slot": time_slot,
-                    "estimated_minutes": estimated,
-                    "acceptance_criteria": criteria,
-                    "notes": notes,
-                    "must_today": must_today,
-                    "source": "user",
-                    "counts_toward_capacity": not exclude_capacity,
-                }
-                if repeat_daily:
-                    create_daily_task(task_data)
-                    st.success("已创建每日任务，并加入今天的计划。")
-                else:
-                    create_task(task_data)
-                    st.success("已加入今日全部任务。")
+                create_task(
+                    {
+                        "title": title,
+                        "planned_date": day.isoformat(),
+                        "start_time": start.strftime("%H:%M") if start else None,
+                        "time_slot": slot,
+                        "category": "个人事务",
+                        "priority": "普通",
+                        "estimated_minutes": 0,
+                        "acceptance_criteria": "任务已完成",
+                        "notes": notes,
+                        "source": "user",
+                    }
+                )
+                st.success("已加入今天计划")
                 st.rerun()
             except ValueError as error:
                 st.error(str(error))
 
 
-def _task_actions(task: dict, context: str) -> None:
-    col1, col2, col3 = st.columns([1, 1, 4])
-    if task["status"] != "已完成" and col1.button(
-        "完成", key=f"today_done_{context}_{task['id']}"
-    ):
-        complete_task(task["id"])
-        st.rerun()
-    if task["status"] not in {"已完成", "已放弃"} and col2.button(
-        "移到明天", key=f"today_move_{context}_{task['id']}"
-    ):
-        count = postpone_task(task["id"])
-        if count >= 3:
-            st.warning("该任务已经连续延期 3 次，请检查是否过大、不重要或需要拆分。")
-        else:
-            st.toast("已移到明天")
-        st.rerun()
-
-
-def _habit_strip(today_text: str) -> None:
-    st.subheader("每日习惯")
-    habit_items = list_habits(today_text)
-    columns = st.columns(len(habit_items))
-    for column, habit in zip(columns, habit_items):
-        streak = calculate_streak(habit["id"])
-        with column:
-            checked = st.checkbox(
-                habit["name"], value=bool(habit["completed"]), key=f"home_habit_{habit['id']}"
+def _task_editor(task: dict) -> None:
+    with st.expander("编辑", expanded=False):
+        with st.form(f"edit_day_task_{task['id']}"):
+            title = st.text_input("任务", value=task["title"])
+            left, right = st.columns(2)
+            start = left.time_input("开始", value=_time_value(task["start_time"]))
+            end = right.time_input("结束", value=_time_value(task["end_time"]))
+            slot = st.selectbox(
+                "时间段",
+                ["上午", "下午", "晚上", "全天"],
+                index=["上午", "下午", "晚上", "全天"].index(task["time_slot"]),
             )
-            st.caption(f"🔥 {streak} 天 · 目标 {habit['target_minutes']} 分钟")
+            notes = st.text_area("备注", value=task["notes"], height=70)
+            saved = st.form_submit_button("保存修改")
+        if saved:
+            try:
+                update_task(
+                    task["id"],
+                    {
+                        "title": title,
+                        "start_time": start.strftime("%H:%M") if start else None,
+                        "end_time": end.strftime("%H:%M") if end else None,
+                        "time_slot": slot,
+                        "notes": notes,
+                    },
+                )
+                st.rerun()
+            except ValueError as error:
+                st.error(str(error))
+        if st.button("删除这项", key=f"delete_day_task_{task['id']}"):
+            delete_task(task["id"])
+            st.rerun()
+
+
+def _timeline(day: date) -> None:
+    st.markdown('<div class="section-space"></div>', unsafe_allow_html=True)
+    st.markdown("## 今天的时间安排")
+    _quick_task_form(day)
+    tasks = list_tasks(day.isoformat())
+    for slot, icon in SLOTS:
+        slot_tasks = [task for task in tasks if task["time_slot"] == slot]
+        st.markdown(f"### {icon} {slot}")
+        if not slot_tasks:
+            st.caption("留白，也是一种安排。")
+            continue
+        for task in slot_tasks:
+            left, middle, right = st.columns([1.4, 6, 1.4])
+            time_text = task["start_time"] or "随时"
+            if task["end_time"]:
+                time_text += f" — {task['end_time']}"
+            left.markdown(f"**{time_text}**")
+            done = task["status"] == "已完成"
+            middle.markdown(f"{'~~' if done else ''}{task['title']}{'~~' if done else ''}")
+            if done:
+                right.caption("✓ 已完成")
+            elif right.button("完成", key=f"finish_day_task_{task['id']}"):
+                complete_task(task["id"])
+                st.rerun()
+            _task_editor(task)
+    total = len(tasks)
+    completed = sum(task["status"] == "已完成" for task in tasks)
+    rate = round(completed / total * 100) if total else 0
+    st.caption(f"今日 {total} 项 · 已完成 {completed} 项 · {rate}%")
+    st.progress(rate)
+
+
+def _habit_strip(day: date) -> None:
+    habits = list_habits(day.isoformat())
+    if not habits:
+        return
+    st.markdown("### 🌱 Life")
+    columns = st.columns(3)
+    for index, habit in enumerate(habits):
+        with columns[index % 3]:
+            checked = st.checkbox(
+                habit["name"],
+                value=bool(habit["completed"]),
+                key=f"diary_habit_{day}_{habit['id']}",
+            )
             if checked != bool(habit["completed"]):
                 save_habit_log(
-                    habit["id"], today_text, checked,
+                    habit["id"],
+                    day.isoformat(),
+                    checked,
                     habit["target_minutes"] if checked else 0,
                 )
                 st.rerun()
 
 
-def render() -> None:
-    now = datetime.now()
-    today_text = date.today().isoformat()
-    page_header("TODAY", f"{date.today():%Y年%m月%d日} · 今天最重要的事情，只有一件。")
+def _reading(day: date) -> None:
+    current_books = [book for book in list_books() if book["status"] == "当前阅读"]
+    st.markdown("## 📚 Reading")
+    if not current_books:
+        st.caption("还没有设置当前阅读，可在“阅读”页选择一本。")
+        return
+    for book in current_books:
+        total = int(book["total_pages"])
+        current = int(book["current_page"])
+        today_minutes = reading_minutes_for_day(day, book["id"])
+        st.markdown(f"### 《{book['title']}》")
+        st.caption(f"今天 {today_minutes} min · 进度 {current} / {total or '—'}")
+        if total:
+            st.progress(min(100, round(current / total * 100)))
+    with st.form(f"today_reading_{day.isoformat()}", clear_on_submit=True):
+        labels = {book["id"]: book["title"] for book in current_books}
+        book_id = st.selectbox("书籍", list(labels), format_func=labels.get)
+        left, right = st.columns(2)
+        minutes = left.number_input("分钟", min_value=1, value=30)
+        pages = right.number_input("读了多少页", min_value=0, value=0)
+        learned = st.text_area("今天读到什么值得记住？", height=90)
+        saved = st.form_submit_button("保存阅读")
+    if saved:
+        add_reading_log(
+            book_id, minutes, pages, learned, "", "", "",
+            log_date=day,
+        )
+        st.success("阅读记录已保存")
+        st.rerun()
 
-    for reminder in collect_reminders(now):
-        getattr(st, reminder["level"])(reminder["message"])
-    if is_night_closing(now):
-        st.error("夜间收尾状态：不再推荐新的高强度任务。优先睡眠，未完成任务请明天重新安排。")
 
-    tasks = list_tasks(today_text)
-    summary = task_summary(1)
-    main_task = find_main_task(tasks)
-    if main_task:
+def _journal_form(day: date, journal: dict) -> None:
+    st.markdown('<div class="chapter"><div class="chapter-kicker">MY DAY</div></div>', unsafe_allow_html=True)
+    with st.form(f"journal_page_{day.isoformat()}"):
+        st.markdown("## ✍️ 今天发生了什么？")
+        story = st.text_area(
+            "日记正文",
+            value=journal["day_story"],
+            height=260,
+            placeholder="自由地写。这里不需要结构，也不需要有结论。",
+            label_visibility="collapsed",
+        )
+
+        st.markdown('<div class="section-space"></div>', unsafe_allow_html=True)
+        st.markdown("## 🧠 今天学到了什么？")
+        learning = st.text_area(
+            "学习记录",
+            value=journal["learning_notes"],
+            height=170,
+            placeholder="今天有哪些真正理解了，而不是只是看过的东西？",
+            label_visibility="collapsed",
+        )
+        technical = st.text_input(
+            "今天最大的技术收获",
+            value=journal["technical_gain"],
+            placeholder="用一句话留下最值得复用的经验",
+        )
+
+        st.markdown('<div class="section-space"></div>', unsafe_allow_html=True)
+        st.markdown("## 🌿 今天的生活")
+        life = st.text_area(
+            "生活记录",
+            value=journal["life_notes"],
+            height=170,
+            placeholder="不需要有意义，只记录今天真实发生的生活。",
+            label_visibility="collapsed",
+        )
+
+        st.markdown('<div class="section-space"></div>', unsafe_allow_html=True)
+        st.markdown("## 💭 今天想明白了什么？")
+        growth = st.text_area(
+            "成长思考",
+            value=journal["growth_thoughts"],
+            height=170,
+            label_visibility="collapsed",
+        )
+        reading_note = st.text_area(
+            "今天读到什么值得记住？",
+            value=journal["reading_note"],
+            height=100,
+        )
+        ex_left, ex_right = st.columns([1, 3])
+        exercise_minutes = ex_left.number_input(
+            "运动分钟",
+            min_value=0,
+            value=int(journal["exercise_minutes"]),
+        )
+        exercise_content = ex_right.text_input(
+            "运动内容",
+            value=journal["exercise_content"],
+            placeholder="散步、跑步、力量训练……",
+        )
+
+        st.markdown('<div class="chapter"><div class="chapter-kicker">END OF DAY</div></div>', unsafe_allow_html=True)
+        st.markdown("## 🌙 晚上复盘")
+        best = st.text_area("今天做得最好的一件事是什么？", value=journal["review_best"])
+        problem = st.text_area("今天最大的问题是什么？", value=journal["review_problem"])
+        gain = st.text_area("今天最大的收获是什么？", value=journal["review_gain"])
+        tab_learning, tab_life, tab_self = st.tabs(["学习", "生活", "自己"])
+        improvement_learning = tab_learning.text_area(
+            "学习上还需要优化什么？",
+            value=journal["improvement_learning"],
+            key=f"improve_learning_{day}",
+        )
+        improvement_life = tab_life.text_area(
+            "生活上还需要优化什么？",
+            value=journal["improvement_life"],
+            key=f"improve_life_{day}",
+        )
+        improvement_self = tab_self.text_area(
+            "自己还需要调整什么？",
+            value=journal["improvement_self"],
+            key=f"improve_self_{day}",
+        )
+        tomorrow = st.text_area(
+            "明天最重要的一件事情",
+            value=journal["tomorrow_focus"],
+        )
+        self_message = st.text_area(
+            "今天想给自己留一句什么？",
+            value=journal["self_message"],
+        )
+        saved = st.form_submit_button("保存这一天", type="primary", use_container_width=True)
+    if saved:
+        saved_at = save_journal(
+            day,
+            {
+                "day_story": story,
+                "learning_notes": learning,
+                "technical_gain": technical,
+                "life_notes": life,
+                "growth_thoughts": growth,
+                "reading_note": reading_note,
+                "exercise_minutes": exercise_minutes,
+                "exercise_content": exercise_content,
+                "review_best": best,
+                "review_problem": problem,
+                "review_gain": gain,
+                "improvement_learning": improvement_learning,
+                "improvement_life": improvement_life,
+                "improvement_self": improvement_self,
+                "tomorrow_focus": tomorrow,
+                "self_message": self_message,
+            },
+        )
+        st.success(f"✓ 已保存 · {saved_at[11:16]}")
+        st.rerun()
+    if journal["updated_at"]:
         st.markdown(
-            f'<div class="priority-box"><span class="eyebrow">今天最重要的一件事</span><br>'
-            f'<strong style="font-size:1.35rem">{main_task["title"]}</strong><br>'
-            f'<span class="small-muted">验收：{main_task["acceptance_criteria"] or "请补充明确验收标准"}</span></div>',
+            f'<div class="saved-note">✓ 已保存 · {journal["updated_at"][11:16]}</div>',
             unsafe_allow_html=True,
         )
-    else:
-        st.info("今天还没有任务。先安排一个真正重要的行动。")
 
-    metrics = st.columns(5)
-    metrics[0].metric("今日完成", f"{summary['completed']} / {summary['total']}")
-    metrics[1].metric("完成率", f"{summary['completion_rate']}%")
-    metrics[2].metric("计划投入", minutes_text(summary["planned_minutes"]))
-    metrics[3].metric("实际投入", minutes_text(summary["actual_minutes"]))
-    metrics[4].metric("项目实战", minutes_text(category_minutes("项目实战")))
 
-    capacity = assess_capacity(tasks)
-    if capacity["overloaded"]:
-        names = "、".join(item["title"] for item in capacity["move_candidates"])
-        st.warning(
-            f"今日任务量已经超过建议可执行范围（共 {minutes_text(capacity['total_minutes'])}）。"
-            f"建议重新排序或移动：{names}。"
-        )
+def _quick_notes(day: date) -> None:
+    notes = list_quick_notes(day)
+    st.markdown("## 💡 今天的灵感")
+    if not notes:
+        st.caption("侧边栏随时可以快速记下一句话。")
+        return
+    for note in notes:
+        created_time = note["created_at"][11:16]
+        with st.expander(f"{created_time} · {note['content'][:48]}"):
+            content = st.text_area(
+                "灵感内容",
+                value=note["content"],
+                key=f"quick_note_text_{note['id']}",
+            )
+            left, right = st.columns(2)
+            if left.button("保存修改", key=f"quick_note_save_{note['id']}"):
+                update_quick_note(note["id"], content)
+                st.rerun()
+            if right.button("删除", key=f"quick_note_delete_{note['id']}"):
+                delete_quick_note(note["id"])
+                st.rerun()
 
-    _quick_task_form()
 
-    system_tasks = [task for task in tasks if task["source"] == "system"]
-    user_tasks = [task for task in tasks if task["source"] == "user"]
-    source_tabs = st.tabs([
-        f"今日全部任务 · {len(tasks)}", f"系统计划 · {len(system_tasks)}", f"我自己安排 · {len(user_tasks)}"
-    ])
-    groups = [tasks, system_tasks, user_tasks]
-    for tab_index, (tab, group) in enumerate(zip(source_tabs, groups)):
-        with tab:
-            if not group:
-                st.caption("暂无任务")
-            for slot in ["上午", "下午", "晚上", "全天"]:
-                slot_tasks = [task for task in group if task["time_slot"] == slot]
-                if not slot_tasks:
-                    continue
-                st.markdown(f"### {slot}")
-                for task in slot_tasks:
-                    task_card(task)
-                    _task_actions(task, str(tab_index))
+def _sleep_message(day: date) -> None:
+    if day != date.today() or get_setting("sleep_reminder_enabled", "1") != "1":
+        return
+    sleep_hour, sleep_minute = map(int, get_setting("sleep_time", "23:00").split(":"))
+    sleep_at = datetime.combine(day, time(sleep_hour, sleep_minute))
+    now = datetime.now()
+    if now >= sleep_at:
+        st.error("🌙 今天到这里，去睡觉。")
+    elif now >= sleep_at - timedelta(minutes=10):
+        st.warning("放下高强度任务，准备洗漱。")
+    elif now >= sleep_at - timedelta(minutes=30):
+        st.info("今天差不多该收尾了。")
 
-    st.subheader("今日建议 · 为什么这样安排")
-    advice = build_today_advice()
-    if advice:
-        for item in advice:
-            st.markdown(f"**{item['slot']}｜{item['task']}**  \\n+{item['reason']}")
-    else:
-        st.caption("当前没有待执行的今日任务。")
 
-    _habit_strip(today_text)
-
-    overdue = fetch_all(
-        """
-        SELECT id, title, start_time, end_time, postponement_count
-        FROM tasks
-        WHERE planned_date = ? AND status NOT IN ('已完成', '已放弃')
-          AND end_time IS NOT NULL AND end_time < ?
-        ORDER BY end_time
-        LIMIT 100
-        """,
-        (today_text, now.strftime("%H:%M")),
-    )
-    if overdue:
-        st.warning(f"今日有 {len(overdue)} 个计划任务已超时未完成，请在任务页处理。")
+def render(selected_date: date | None = None, embedded: bool = False) -> None:
+    day = selected_date or date.today()
+    journal = get_journal(day)
+    if embedded:
+        st.info(f"正在编辑 {day:%Y年%m月%d日}。保存只会更新这一天。")
+    _header(day, journal)
+    _direction_card()
+    _timeline(day)
+    st.markdown('<div class="section-space"></div>', unsafe_allow_html=True)
+    _habit_strip(day)
+    _journal_form(day, journal)
+    st.markdown('<div class="section-space"></div>', unsafe_allow_html=True)
+    _reading(day)
+    st.markdown('<div class="section-space"></div>', unsafe_allow_html=True)
+    _quick_notes(day)
+    _sleep_message(day)

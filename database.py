@@ -274,6 +274,116 @@ def _migration_002_task_recurrence(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_003_study_diary(connection: sqlite3.Connection) -> None:
+    """增加一天一页日记、方向快照和低摩擦灵感箱。"""
+    direction_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(directions)").fetchall()
+    }
+    if "current_stage" not in direction_columns:
+        connection.execute(
+            "ALTER TABLE directions ADD COLUMN current_stage TEXT NOT NULL DEFAULT ''"
+        )
+    if "current_goal" not in direction_columns:
+        connection.execute(
+            "ALTER TABLE directions ADD COLUMN current_goal TEXT NOT NULL DEFAULT ''"
+        )
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS daily_journals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            journal_date TEXT NOT NULL UNIQUE,
+            mood TEXT NOT NULL DEFAULT '',
+            focus TEXT NOT NULL DEFAULT '',
+            secondary_focus_1 TEXT NOT NULL DEFAULT '',
+            secondary_focus_2 TEXT NOT NULL DEFAULT '',
+            day_story TEXT NOT NULL DEFAULT '',
+            learning_notes TEXT NOT NULL DEFAULT '',
+            technical_gain TEXT NOT NULL DEFAULT '',
+            life_notes TEXT NOT NULL DEFAULT '',
+            growth_thoughts TEXT NOT NULL DEFAULT '',
+            reading_note TEXT NOT NULL DEFAULT '',
+            exercise_minutes INTEGER NOT NULL DEFAULT 0 CHECK (exercise_minutes >= 0),
+            exercise_content TEXT NOT NULL DEFAULT '',
+            review_best TEXT NOT NULL DEFAULT '',
+            review_problem TEXT NOT NULL DEFAULT '',
+            review_gain TEXT NOT NULL DEFAULT '',
+            improvement_learning TEXT NOT NULL DEFAULT '',
+            improvement_life TEXT NOT NULL DEFAULT '',
+            improvement_self TEXT NOT NULL DEFAULT '',
+            tomorrow_focus TEXT NOT NULL DEFAULT '',
+            self_message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS goal_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_date TEXT NOT NULL UNIQUE,
+            long_term_vision TEXT NOT NULL DEFAULT '',
+            current_stage TEXT NOT NULL DEFAULT '',
+            current_goal TEXT NOT NULL DEFAULT '',
+            primary_conflict TEXT NOT NULL DEFAULT '',
+            secondary_conflicts TEXT NOT NULL DEFAULT '',
+            current_priority TEXT NOT NULL DEFAULT '',
+            not_doing TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS quick_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            note_date TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_daily_journals_date
+            ON daily_journals(journal_date);
+        CREATE INDEX IF NOT EXISTS idx_quick_notes_date
+            ON quick_notes(note_date, created_at);
+
+        INSERT OR IGNORE INTO daily_journals (
+            journal_date, day_story, learning_notes, life_notes, growth_thoughts,
+            review_problem, review_gain, improvement_learning, improvement_life,
+            tomorrow_focus, self_message, created_at, updated_at
+        )
+        SELECT review_date, events, work_problem, life_state, growth_thought,
+               problem_to_solve, biggest_gain, learning_improvement, life_improvement,
+               tomorrow_main_task, free_text, updated_at, updated_at
+        FROM daily_reviews;
+        """
+    )
+
+
+def _migration_004_remove_legacy_direction_demo(
+    connection: sqlite3.Connection,
+) -> None:
+    """只清空完全匹配旧版内置示例的方向，不触碰用户改写过的内容。"""
+    connection.execute(
+        """
+        UPDATE directions
+        SET long_term_vision = '', primary_conflict = '',
+            secondary_conflicts = '', current_priority = '', not_doing = '',
+            updated_at = ?
+        WHERE id = 1
+          AND long_term_vision = ?
+          AND primary_conflict = ?
+          AND secondary_conflicts = ?
+          AND current_priority = ?
+          AND not_doing = ?
+        """,
+        (
+            datetime.now().isoformat(timespec="seconds"),
+            "成为具备企业级 AI 项目交付能力的人；建立健康、稳定、可持续的生活方式。",
+            "想做大项目，但工程基础和真实项目经验不足。",
+            "Git 不熟；部署经验不足；商业知识不足；作息不稳定。",
+            "通过一个可运行项目补齐企业级项目实战能力。",
+            "暂时不同时学习过多新框架，不开启第二个大项目。",
+        ),
+    )
+
+
 MIGRATIONS = (
     Migration(
         1,
@@ -286,6 +396,18 @@ MIGRATIONS = (
         "task_recurrence_and_capacity",
         _migration_checksum("002:add-task-recurrence-capacity-columns-and-unique-index"),
         _migration_002_task_recurrence,
+    ),
+    Migration(
+        3,
+        "study_diary_daily_pages",
+        _migration_checksum("003:add-daily-journals-goal-snapshots-quick-notes"),
+        _migration_003_study_diary,
+    ),
+    Migration(
+        4,
+        "remove_legacy_direction_demo",
+        _migration_checksum("004:clear-only-exact-legacy-direction-demo"),
+        _migration_004_remove_legacy_direction_demo,
     ),
 )
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
@@ -377,27 +499,10 @@ def _seed_defaults(connection: sqlite3.Connection) -> None:
             current_priority, not_doing, updated_at
         ) VALUES (1, ?, ?, ?, ?, ?, ?)
         """,
-        (
-            "成为具备企业级 AI 项目交付能力的人；建立健康、稳定、可持续的生活方式。",
-            "想做大项目，但工程基础和真实项目经验不足。",
-            "Git 不熟；部署经验不足；商业知识不足；作息不稳定。",
-            "通过一个可运行项目补齐企业级项目实战能力。",
-            "暂时不同时学习过多新框架，不开启第二个大项目。",
-            now,
-        ),
+        ("", "", "", "", "", now),
     )
-    _seed_goals(connection, now)
     _seed_habits(connection, now)
     _seed_books(connection)
-    _seed_recurring_tasks(connection, now)
-    if not connection.execute(
-        "SELECT value FROM settings WHERE key = ? LIMIT 1", ("demo_tasks_seeded",)
-    ).fetchone():
-        _seed_demo_tasks(connection, now)
-        connection.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?)",
-            ("demo_tasks_seeded", date.today().isoformat()),
-        )
 
 
 def _seed_goals(connection: sqlite3.Connection, now: str) -> None:

@@ -38,16 +38,31 @@ def test_database_seeds_required_defaults(tmp_path: Path) -> None:
             "SELECT target_minutes FROM habits WHERE name = '睡眠 8 小时'"
         ).fetchone()[0] == 480
         assert connection.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 17
-        assert connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 8
+        assert connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
         assert connection.execute(
             "SELECT COUNT(*) FROM recurring_task_templates"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM directions").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM goals").fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT long_term_vision FROM directions WHERE id = 1"
+        ).fetchone()[0] == ""
 
 
 def test_daily_tasks_materialize_once_and_sleep_does_not_use_capacity(tmp_path: Path) -> None:
     db_path = make_database(tmp_path)
     today = date.today().isoformat()
+    create_daily_task(
+        {
+            "title": "保持 8 小时睡眠",
+            "category": "生活",
+            "time_slot": "晚上",
+            "estimated_minutes": 480,
+            "acceptance_criteria": "实际睡眠达到 8 小时",
+            "counts_toward_capacity": False,
+        },
+        db_path,
+    )
     materialize_daily_tasks(today, db_path)
     materialize_daily_tasks(today, db_path)
     sleep_task = fetch_one(
@@ -63,7 +78,7 @@ def test_daily_tasks_materialize_once_and_sleep_does_not_use_capacity(tmp_path: 
     assert sleep_task["recurring_template_id"]
     assert sleep_task["estimated_minutes"] == 480
     assert sleep_task["counts_toward_capacity"] == 0
-    assert len(list_tasks(today, db_path=db_path)) == 9
+    assert len(list_tasks(today, db_path=db_path)) == 1
 
 
 def test_user_can_create_a_daily_task(tmp_path: Path) -> None:
@@ -100,7 +115,7 @@ def test_manual_today_task_is_included_in_total_and_persists(tmp_path: Path) -> 
     )
     tasks = list_tasks(today, db_path=db_path)
     assert any(task["id"] == task_id and task["source"] == "user" for task in tasks)
-    assert task_summary(1, db_path)["total"] == 9
+    assert task_summary(1, db_path)["total"] == 1
     assert get_task(task_id, db_path)["title"] == "去理发"
 
 
@@ -162,6 +177,18 @@ def test_habit_streak_and_reading_progress(tmp_path: Path) -> None:
 
 def test_rule_advice_and_reminders(tmp_path: Path) -> None:
     db_path = make_database(tmp_path)
+    create_task(
+        {
+            "title": "早晨专注任务",
+            "category": "项目实战",
+            "priority": "主任务",
+            "planned_date": date.today().isoformat(),
+            "start_time": "09:00",
+            "time_slot": "上午",
+            "acceptance_criteria": "完成任务",
+        },
+        db_path,
+    )
     advice = build_today_advice(db_path)
     assert advice
     assert all(item["reason"] for item in advice)

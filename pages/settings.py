@@ -17,7 +17,7 @@ def _parse_time(value: str) -> time:
 
 
 def render() -> None:
-    page_header("设置", "V1 使用应用内提醒：页面打开时检查，不在后台常驻。")
+    page_header("设置", "保持简单：提醒、睡眠时间与本地数据安全。")
     with st.form("reminder_settings"):
         enabled = st.checkbox("开启任务提醒", value=get_setting("reminders_enabled", "1") == "1")
         lead_options = [5, 10, 15, 30]

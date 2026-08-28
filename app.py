@@ -1,17 +1,20 @@
-"""Personal Growth OS Streamlit 入口。"""
+"""Study Diary Streamlit 入口。"""
 
 from __future__ import annotations
+
+from datetime import date
 
 import streamlit as st
 
 from database import init_database
-from pages import books, dashboard, goals, habits, review, settings, tasks, today
+from pages import books, goals, journal, settings, today
+from services.journal import create_quick_note
 from services.tasks import materialize_daily_tasks
 
 
 st.set_page_config(
-    page_title="Personal Growth OS",
-    page_icon="🌱",
+    page_title="Study Diary",
+    page_icon="📖",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -19,32 +22,92 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        .stApp { background: #f6f7f9; }
-        .block-container { padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1280px; }
-        [data-testid="stSidebar"] { background: #13231b; }
-        [data-testid="stSidebar"] * { color: #edf6f0; }
-        .hero {
-            padding: 1.4rem 1.6rem; border-radius: 18px;
-            background: linear-gradient(135deg, #183d2d, #2d6a4f);
-            color: white; margin-bottom: 1rem;
+        :root {
+            --paper: #fbfaf6;
+            --ink: #29312e;
+            --muted: #75807b;
+            --sage: #789486;
+            --sage-soft: #e8efea;
+            --warm: #f2eadf;
         }
-        .hero h1 { margin: 0; font-size: 2rem; }
-        .hero p { margin: .35rem 0 0; color: #cfe4d7; }
-        .task-card {
-            background: white; border: 1px solid #e5e9e7; border-left: 5px solid #40916c;
-            border-radius: 12px; padding: .85rem 1rem; margin: .5rem 0;
+        .stApp { background: var(--paper); color: var(--ink); }
+        .block-container {
+            max-width: 1060px;
+            padding-top: 2.2rem;
+            padding-bottom: 7rem;
         }
-        .task-card.done { opacity: .68; border-left-color: #9ca3af; }
-        .task-meta { color: #66736d; font-size: .86rem; margin-top: .25rem; }
-        .eyebrow { color: #2d6a4f; font-weight: 700; letter-spacing: .08em; font-size: .78rem; }
+        [data-testid="stSidebar"] {
+            background: #eef2ed;
+            border-right: 1px solid #dde5df;
+        }
+        [data-testid="stSidebar"] * { color: #314039; }
+        h1, h2, h3 { letter-spacing: -0.02em; }
+        .day-hero {
+            padding: 2.8rem 0 3.2rem;
+            margin-bottom: 1.5rem;
+        }
+        .day-name {
+            color: var(--sage);
+            font-size: .86rem;
+            font-weight: 700;
+            letter-spacing: .18em;
+            text-transform: uppercase;
+        }
+        .day-date {
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 3.15rem;
+            line-height: 1.08;
+            margin: .35rem 0 .6rem;
+            color: #26332d;
+        }
+        .day-question { color: var(--muted); font-size: 1.08rem; }
+        .section-space { height: 2.7rem; }
+        .chapter {
+            margin-top: 3.8rem;
+            padding-top: 2.4rem;
+            border-top: 1px solid #dfe5e1;
+        }
+        .chapter-kicker {
+            color: var(--sage);
+            font-size: .78rem;
+            font-weight: 800;
+            letter-spacing: .2em;
+        }
+        .direction-note {
+            padding: 1.35rem 1.5rem;
+            border-radius: 16px;
+            background: var(--sage-soft);
+            margin: 1rem 0;
+        }
+        .focus-note {
+            padding: 1.6rem 1.7rem;
+            border-radius: 18px;
+            background: #fff;
+            border: 1px solid #e4e4dd;
+            box-shadow: 0 8px 28px rgba(50, 67, 58, .05);
+        }
+        .timeline-item {
+            border-left: 2px solid #b6c7bd;
+            padding: .2rem 0 1.25rem 1.25rem;
+            margin-left: .35rem;
+        }
+        .timeline-time { color: var(--sage); font-weight: 700; font-size: .85rem; }
+        .timeline-title { font-size: 1rem; color: var(--ink); }
+        .journal-prose {
+            font-family: Georgia, "Times New Roman", serif;
+            white-space: pre-wrap;
+            line-height: 1.85;
+            font-size: 1.06rem;
+        }
+        .saved-note { color: #668273; font-size: .84rem; }
+        div[data-testid="stProgress"] > div > div { background-color: var(--sage); }
         div[data-testid="stMetric"] {
-            background: white; border: 1px solid #e6ebe8; border-radius: 14px; padding: .7rem 1rem;
+            background: transparent;
+            border: 0;
+            padding: .2rem .4rem;
         }
-        .priority-box {
-            background: #fff8e7; border: 1px solid #f3d58b; border-radius: 14px;
-            padding: 1rem 1.2rem; margin-bottom: 1rem;
-        }
-        .small-muted { color: #6b7280; font-size: .88rem; }
+        .stButton button, .stFormSubmitButton button { border-radius: 10px; }
+        textarea { line-height: 1.65 !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -54,21 +117,39 @@ init_database()
 materialize_daily_tasks()
 
 PAGES = {
-    "今日": today.render,
-    "目标与方向": goals.render,
-    "任务": tasks.render,
-    "阅读": books.render,
-    "习惯": habits.render,
-    "复盘": review.render,
-    "数据统计": dashboard.render,
-    "设置": settings.render,
+    "📖 今天": today.render,
+    "📅 日记": journal.render,
+    "🎯 方向": goals.render,
+    "📚 阅读": books.render,
+    "⚙️ 设置": settings.render,
 }
 
 with st.sidebar:
-    st.markdown("## 🌱 Growth OS")
-    st.caption("把长期方向，变成今天的行动。")
-    selected_page = st.radio("导航", list(PAGES), label_visibility="collapsed")
+    st.markdown("## 📖 Study Diary")
+    st.caption("一天一页，记下真实生活。")
+    selected_page = st.radio(
+        "导航",
+        list(PAGES),
+        label_visibility="collapsed",
+        key="main_navigation",
+    )
     st.divider()
-    st.caption("V0.2 · 本地单用户 · 数据保存在 SQLite")
+    st.markdown("### 💡 快速记录")
+    with st.form("sidebar_quick_note", clear_on_submit=True):
+        quick_content = st.text_area(
+            "刚刚想到什么？",
+            placeholder="只管记下来，暂时不用分类。",
+            height=92,
+            label_visibility="collapsed",
+        )
+        quick_saved = st.form_submit_button("保存灵感", use_container_width=True)
+    if quick_saved:
+        try:
+            create_quick_note(quick_content, date.today())
+            st.success("已放入今天的灵感箱")
+        except ValueError as error:
+            st.error(str(error))
+    st.divider()
+    st.caption("本地单用户 · 数据只保存在 SQLite")
 
 PAGES[selected_page]()
