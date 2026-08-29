@@ -121,3 +121,35 @@ def test_today_task_appears_and_completion_changes_state(tmp_path: Path) -> None
     complete_task(task_id, db_path=db_path)
     task = fetch_one("SELECT status FROM tasks WHERE id = ?", (task_id,), db_path)
     assert task["status"] == "已完成"
+
+
+def test_future_and_past_plans_are_kept_on_their_real_dates(tmp_path: Path) -> None:
+    db_path = make_database(tmp_path)
+    create_task(
+        {
+            "title": "复盘昨天的计划",
+            "planned_date": "2026-08-28",
+            "time_slot": "晚上",
+            "category": "成长思考",
+            "acceptance_criteria": "写完复盘",
+        },
+        db_path,
+    )
+    create_task(
+        {
+            "title": "安排明天的深度工作",
+            "planned_date": "2026-08-30",
+            "time_slot": "上午",
+            "category": "项目实战",
+            "acceptance_criteria": "完成核心模块",
+        },
+        db_path,
+    )
+
+    assert [task["title"] for task in list_tasks("2026-08-28", db_path=db_path)] == [
+        "复盘昨天的计划"
+    ]
+    assert [task["title"] for task in list_tasks("2026-08-30", db_path=db_path)] == [
+        "安排明天的深度工作"
+    ]
+    assert list_tasks("2026-08-29", db_path=db_path) == []

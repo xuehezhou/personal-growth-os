@@ -10,6 +10,7 @@
 | Planner | 容量预警 | 已实现 | `services/planner.py` | ✅ |
 | Planner | 每天自动生成完整系统计划 | 部分实现 | 只有建议与首日示例；每日任务模板可生成实例 | ❌ |
 | Tasks | 创建/编辑/完成/延期/放弃/删除 | 已实现 | `pages/tasks.py`、`services/tasks.py` | ✅ 核心 |
+| Tasks | 按现实日期规划未来并查看历史计划 | 已实现 | `pages/tasks.py`、`tasks.planned_date` | ✅ 核心 + 冒烟 |
 | Tasks | 验收标准 | 已实现 | `services/tasks.py` | ✅ |
 | Tasks | 每日重复任务 | 已实现 | `recurring_task_templates` | ✅ |
 | Goals | 编辑方向字段 | 已实现 | `pages/goals.py`、`directions` | ✅ 冒烟 |

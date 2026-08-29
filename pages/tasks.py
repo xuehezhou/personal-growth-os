@@ -1,14 +1,14 @@
-"""任务 CRUD 页面。"""
+"""按现实日期创建、查看和调整计划。"""
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 import streamlit as st
 
 from database import fetch_all
 from models import CATEGORIES, PRIORITIES, TASK_STATUSES, TIME_SLOTS
-from pages.common import page_header, task_card
+from pages.common import minutes_text, page_header
 from services.planner import assess_capacity
 from services.tasks import (
     abandon_task,
@@ -17,12 +17,16 @@ from services.tasks import (
     create_task,
     delete_task,
     get_task,
-    list_tasks,
     list_recurring_tasks,
+    list_tasks,
     postpone_task,
     stop_recurring_task,
     update_task,
 )
+
+
+SLOT_ICONS = {"上午": "☀️", "下午": "🌤", "晚上": "🌙", "全天": "·"}
+WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
 
 def _goal_options() -> tuple[list[int | None], dict[int | None, str]]:
@@ -30,41 +34,133 @@ def _goal_options() -> tuple[list[int | None], dict[int | None, str]]:
         "SELECT id, name FROM goals WHERE status = '进行中' ORDER BY is_current DESC, id LIMIT 100"
     )
     ids: list[int | None] = [None] + [goal["id"] for goal in goals]
-    labels = {None: "不属于当前目标", **{goal["id"]: goal["name"] for goal in goals}}
+    labels = {None: "不关联目标", **{goal["id"]: goal["name"] for goal in goals}}
     return ids, labels
 
 
-def _create_form() -> None:
-    with st.expander("＋ 创建任务", expanded=False):
+def _time_value(value: str | None) -> time | None:
+    return datetime.strptime(value, "%H:%M").time() if value else None
+
+
+def _safe_index(options: list[str], value: str, fallback: int = 0) -> int:
+    return options.index(value) if value in options else fallback
+
+
+def _date_label(day: date) -> str:
+    difference = (day - date.today()).days
+    if difference == -1:
+        return "昨天"
+    if difference == 0:
+        return "今天"
+    if difference == 1:
+        return "明天"
+    if difference < 0:
+        return f"{abs(difference)} 天前"
+    return f"{difference} 天后"
+
+
+def _set_planner_date(day: date) -> None:
+    st.session_state["planner_date"] = day
+    st.session_state.pop("planner_edit_task_id", None)
+
+
+def _date_navigator() -> date:
+    if "planner_date" not in st.session_state:
+        st.session_state["planner_date"] = date.today()
+
+    left, today_column, picker, tomorrow_column, right = st.columns([1, 1, 3.2, 1, 1])
+    selected = picker.date_input(
+        "计划日期",
+        key="planner_date",
+        format="YYYY-MM-DD",
+        label_visibility="collapsed",
+    )
+    left.button(
+        "←",
+        help="前一天",
+        use_container_width=True,
+        on_click=_set_planner_date,
+        args=(selected - timedelta(days=1),),
+    )
+    today_column.button(
+        "今天",
+        use_container_width=True,
+        on_click=_set_planner_date,
+        args=(date.today(),),
+    )
+    tomorrow_column.button(
+        "明天",
+        use_container_width=True,
+        on_click=_set_planner_date,
+        args=(date.today() + timedelta(days=1),),
+    )
+    right.button(
+        "→",
+        help="后一天",
+        use_container_width=True,
+        on_click=_set_planner_date,
+        args=(selected + timedelta(days=1),),
+    )
+    st.caption(
+        f"{_date_label(selected)} · {selected:%Y年%m月%d日} · {WEEKDAYS[selected.weekday()]}"
+    )
+    return selected
+
+
+def _create_form(day: date, expanded: bool) -> None:
+    with st.expander(f"＋ 添加{_date_label(day)}的计划", expanded=expanded):
         goal_ids, goal_labels = _goal_options()
-        with st.form("create_task_form", clear_on_submit=True):
-            title = st.text_input("任务名称 *")
-            description = st.text_area("描述")
-            col1, col2, col3 = st.columns(3)
-            category = col1.selectbox("类型", CATEGORIES)
-            priority = col2.selectbox("优先级", PRIORITIES, index=2)
-            planned_date = col3.date_input("日期", date.today())
-            col4, col5, col6 = st.columns(3)
-            start_time = col4.time_input("开始时间", value=None)
-            end_time = col5.time_input("结束时间", value=None)
-            time_slot = col6.selectbox("时间段", TIME_SLOTS)
-            col7, col8 = st.columns(2)
-            estimated = col7.number_input("预计时长（分钟）", min_value=0, value=30, step=5)
-            goal_id = col8.selectbox("所属目标", goal_ids, format_func=goal_labels.get)
-            criteria = st.text_area("验收标准", placeholder="达到什么结果才算完成？")
-            notes = st.text_area("备注")
-            must_today = st.checkbox("必须在所选日期完成")
-            repeat_daily = st.checkbox("每天重复（从今天开始）")
-            exclude_capacity = st.checkbox("不计入白天计划容量（适合睡眠等任务）")
-            submitted = st.form_submit_button("创建任务", type="primary")
+        with st.form(f"create_plan_{day.isoformat()}", clear_on_submit=True):
+            title = st.text_input("计划内容 *", placeholder="例如：整理项目需求并写出明日执行清单")
+
+            timing, slot_column, duration_column = st.columns([1.15, 1, 1])
+            start_time = timing.time_input("开始时间（可选）", value=None)
+            time_slot = slot_column.selectbox("时间段", TIME_SLOTS)
+            estimated = duration_column.number_input(
+                "预计分钟", min_value=0, value=30, step=5
+            )
+
+            category_column, priority_column = st.columns(2)
+            category = category_column.selectbox(
+                "类型", CATEGORIES, index=CATEGORIES.index("个人事务")
+            )
+            priority = priority_column.selectbox(
+                "优先级", PRIORITIES, index=PRIORITIES.index("普通")
+            )
+
+            criteria = st.text_input(
+                "完成标准",
+                value="完成计划内容",
+                placeholder="做到什么才算真正完成？",
+            )
+            notes = st.text_area(
+                "备注（可选）",
+                placeholder="相关资料、提醒或下一步。",
+                height=78,
+            )
+
+            with st.expander("更多设置"):
+                end_time = st.time_input("结束时间（可选）", value=None)
+                goal_id = st.selectbox("关联目标", goal_ids, format_func=goal_labels.get)
+                must_today = st.checkbox("必须在所选日期完成")
+                exclude_capacity = st.checkbox("不计入当天计划时长（适合睡眠等事项）")
+                repeat_daily = st.checkbox(
+                    "设为每日计划（从今天开始）",
+                    disabled=day != date.today(),
+                    help="每日计划只能从今天启用；规划未来某一天时请保存为单次计划。",
+                )
+
+            submitted = st.form_submit_button(
+                "保存计划", type="primary", use_container_width=True
+            )
+
         if submitted:
             try:
                 task_data = {
                     "title": title,
-                    "description": description,
                     "category": category,
                     "priority": priority,
-                    "planned_date": planned_date.isoformat(),
+                    "planned_date": day.isoformat(),
                     "start_time": start_time.strftime("%H:%M") if start_time else None,
                     "end_time": end_time.strftime("%H:%M") if end_time else None,
                     "time_slot": time_slot,
@@ -78,66 +174,168 @@ def _create_form() -> None:
                 }
                 if repeat_daily:
                     create_daily_task(task_data)
-                    st.success("每日任务已创建，从今天开始自动生成。")
+                    st.success("每日计划已启用，并已加入今天。")
                 else:
                     create_task(task_data)
-                    st.success("任务已创建。")
-                st.rerun()
+                    st.success(f"已加入 {_date_label(day)} 的计划。")
             except ValueError as error:
                 st.error(str(error))
 
 
-def _edit_form(task_id: int) -> None:
+def _summary(tasks: list[dict]) -> None:
+    completed = sum(task["status"] == "已完成" for task in tasks)
+    pending = sum(task["status"] in {"待开始", "进行中"} for task in tasks)
+    planned_minutes = sum(
+        int(task["estimated_minutes"])
+        for task in tasks
+        if task["status"] != "已放弃" and task.get("counts_toward_capacity", 1)
+    )
+    completion_rate = round(completed / len(tasks) * 100) if tasks else 0
+    columns = st.columns(4)
+    columns[0].metric("计划", len(tasks))
+    columns[1].metric("待处理", pending)
+    columns[2].metric("已完成", f"{completion_rate}%")
+    columns[3].metric("预计投入", minutes_text(planned_minutes))
+
+
+def _task_meta(task: dict) -> str:
+    timing = task["start_time"] or task["time_slot"]
+    if task["end_time"]:
+        timing = f"{timing}–{task['end_time']}"
+    recurring = " · 每日" if task.get("recurring_template_id") else ""
+    return (
+        f"{timing} · {task['estimated_minutes']} 分钟 · "
+        f"{task['category']} · {task['priority']}{recurring}"
+    )
+
+
+def _select_task_for_edit(task_id: int) -> None:
+    st.session_state["planner_edit_task_id"] = task_id
+
+
+def _task_list(tasks: list[dict]) -> None:
+    status_filter = st.selectbox(
+        "显示计划",
+        ["全部", "待处理", "已完成", "已放弃"],
+        label_visibility="collapsed",
+    )
+    if status_filter == "待处理":
+        visible = [task for task in tasks if task["status"] in {"待开始", "进行中"}]
+    elif status_filter == "全部":
+        visible = tasks
+    else:
+        visible = [task for task in tasks if task["status"] == status_filter]
+
+    if not visible:
+        if tasks:
+            st.info("当前筛选下没有计划。")
+        else:
+            st.info("这一天还没有计划。点击上方的加号开始安排。")
+        return
+
+    for slot in TIME_SLOTS:
+        slot_tasks = [task for task in visible if task["time_slot"] == slot]
+        if not slot_tasks:
+            continue
+        st.markdown(f"#### {SLOT_ICONS[slot]} {slot}")
+        for task in slot_tasks:
+            with st.container(border=True):
+                content, complete_column, edit_column = st.columns([6, 1.15, 1])
+                if task["status"] == "已完成":
+                    content.markdown(f"~~**{task['title']}**~~")
+                    complete_column.caption("✓ 已完成")
+                elif task["status"] == "已放弃":
+                    content.markdown(f"~~{task['title']}~~")
+                    complete_column.caption("已放弃")
+                else:
+                    content.markdown(f"**{task['title']}**")
+                    if complete_column.button(
+                        "完成", key=f"planner_complete_{task['id']}", use_container_width=True
+                    ):
+                        complete_task(task["id"])
+                        st.rerun()
+                content.caption(_task_meta(task))
+                content.caption(f"完成标准：{task['acceptance_criteria']}")
+                edit_column.button(
+                    "编辑",
+                    key=f"planner_edit_{task['id']}",
+                    use_container_width=True,
+                    on_click=_select_task_for_edit,
+                    args=(task["id"],),
+                )
+
+
+def _edit_panel(task_id: int) -> None:
     task = get_task(task_id)
     if not task:
+        st.session_state.pop("planner_edit_task_id", None)
         return
+
+    st.divider()
+    st.markdown("### 编辑计划")
     goal_ids, goal_labels = _goal_options()
     if task["goal_id"] not in goal_ids:
         goal_ids.append(task["goal_id"])
         goal_labels[task["goal_id"]] = "已归档目标"
-    with st.form(f"edit_task_{task_id}"):
-        title = st.text_input("任务名称", value=task["title"])
-        description = st.text_area("描述", value=task["description"])
-        col1, col2, col3 = st.columns(3)
-        category = col1.selectbox("类型", CATEGORIES, index=CATEGORIES.index(task["category"]))
-        priority = col2.selectbox("优先级", PRIORITIES, index=PRIORITIES.index(task["priority"]))
-        planned_date = col3.date_input("日期", value=date.fromisoformat(task["planned_date"]))
-        col4, col5, col6 = st.columns(3)
-        start_time = col4.text_input("开始时间（HH:MM）", value=task["start_time"] or "")
-        end_time = col5.text_input("结束时间（HH:MM）", value=task["end_time"] or "")
-        time_slot = col6.selectbox("时间段", TIME_SLOTS, index=TIME_SLOTS.index(task["time_slot"]))
-        col7, col8, col9 = st.columns(3)
-        estimated = col7.number_input("预计分钟", min_value=0, value=int(task["estimated_minutes"]))
-        actual = col8.number_input("实际分钟", min_value=0, value=int(task["actual_minutes"]))
-        status = col9.selectbox("状态", TASK_STATUSES, index=TASK_STATUSES.index(task["status"]))
-        completion = st.slider("完成百分比", 0, 100, int(task["completion_percentage"]))
-        goal_id = st.selectbox(
-            "所属目标", goal_ids, index=goal_ids.index(task["goal_id"]), format_func=goal_labels.get
+
+    with st.form(f"planner_edit_form_{task_id}"):
+        title = st.text_input("计划内容", value=task["title"])
+        date_column, slot_column, status_column = st.columns(3)
+        planned_date = date_column.date_input(
+            "计划日期", value=date.fromisoformat(task["planned_date"])
         )
-        criteria = st.text_area("验收标准", value=task["acceptance_criteria"])
-        notes = st.text_area("备注", value=task["notes"])
+        time_slot = slot_column.selectbox(
+            "时间段", TIME_SLOTS, index=_safe_index(TIME_SLOTS, task["time_slot"])
+        )
+        status = status_column.selectbox(
+            "状态", TASK_STATUSES, index=_safe_index(TASK_STATUSES, task["status"])
+        )
+
+        start_column, end_column, duration_column = st.columns(3)
+        start_time = start_column.time_input("开始", value=_time_value(task["start_time"]))
+        end_time = end_column.time_input("结束", value=_time_value(task["end_time"]))
+        estimated = duration_column.number_input(
+            "预计分钟", min_value=0, value=int(task["estimated_minutes"]), step=5
+        )
+
+        category_column, priority_column, goal_column = st.columns(3)
+        category = category_column.selectbox(
+            "类型", CATEGORIES, index=_safe_index(CATEGORIES, task["category"])
+        )
+        priority = priority_column.selectbox(
+            "优先级", PRIORITIES, index=_safe_index(PRIORITIES, task["priority"], 2)
+        )
+        goal_id = goal_column.selectbox(
+            "关联目标",
+            goal_ids,
+            index=goal_ids.index(task["goal_id"]),
+            format_func=goal_labels.get,
+        )
+
+        criteria = st.text_input("完成标准", value=task["acceptance_criteria"])
+        notes = st.text_area("备注", value=task["notes"], height=82)
+        completion = st.slider("完成进度", 0, 100, int(task["completion_percentage"]))
         must_today = st.checkbox("必须在所选日期完成", value=bool(task["must_today"]))
         counts_capacity = st.checkbox(
-            "计入白天计划容量", value=bool(task["counts_toward_capacity"])
+            "计入当天计划时长", value=bool(task["counts_toward_capacity"])
         )
         saved = st.form_submit_button("保存修改", type="primary")
+
     if saved:
         try:
             update_task(
                 task_id,
                 {
                     "title": title,
-                    "description": description,
-                    "category": category,
-                    "priority": priority,
                     "planned_date": planned_date.isoformat(),
-                    "start_time": start_time.strip() or None,
-                    "end_time": end_time.strip() or None,
+                    "start_time": start_time.strftime("%H:%M") if start_time else None,
+                    "end_time": end_time.strftime("%H:%M") if end_time else None,
                     "time_slot": time_slot,
                     "estimated_minutes": estimated,
-                    "actual_minutes": actual,
                     "status": status,
                     "completion_percentage": completion,
+                    "category": category,
+                    "priority": priority,
                     "goal_id": goal_id,
                     "acceptance_criteria": criteria,
                     "notes": notes,
@@ -145,73 +343,79 @@ def _edit_form(task_id: int) -> None:
                     "counts_toward_capacity": counts_capacity,
                 },
             )
-            st.success("任务已更新。")
+            _set_planner_date(planned_date)
             st.rerun()
         except ValueError as error:
             st.error(str(error))
 
+    action_columns = st.columns([1.3, 1.3, 4])
+    next_day = date.fromisoformat(task["planned_date"]) + timedelta(days=1)
+    if task["status"] not in {"已完成", "已放弃"}:
+        if action_columns[0].button("顺延一天", key=f"planner_postpone_{task_id}"):
+            postponements = postpone_task(task_id, next_day.isoformat())
+            _set_planner_date(next_day)
+            if postponements >= 3:
+                st.warning("这项计划已延期 3 次，建议拆小、降级或放弃。")
+            st.rerun()
+        if action_columns[1].button("放弃计划", key=f"planner_abandon_{task_id}"):
+            abandon_task(task_id)
+            st.rerun()
+
+    with st.expander("删除计划"):
+        if task.get("recurring_template_id"):
+            st.caption("每日计划实例不会物理删除；移除时会标记为已放弃，以保留历史。")
+        confirm = st.checkbox("确认删除这项计划", key=f"planner_delete_confirm_{task_id}")
+        if st.button(
+            "确认删除",
+            key=f"planner_delete_{task_id}",
+            disabled=not confirm,
+        ):
+            delete_task(task_id)
+            st.session_state.pop("planner_edit_task_id", None)
+            st.rerun()
+
+
+def _recurring_plans() -> None:
+    recurring = list_recurring_tasks()
+    with st.expander(f"每日计划 · {len(recurring)}"):
+        if not recurring:
+            st.caption("暂无每日计划。在今天添加计划时，可在“更多设置”中启用每日重复。")
+            return
+        st.caption("停止后只影响未来，过去已经生成的记录会保留。")
+        for template in recurring:
+            description, action = st.columns([5, 1])
+            description.markdown(f"**{template['title']}**")
+            description.caption(
+                f"{template['time_slot']} · {template['estimated_minutes']} 分钟 · {template['category']}"
+            )
+            if action.button(
+                "停止", key=f"planner_stop_recurring_{template['id']}", use_container_width=True
+            ):
+                stop_recurring_task(template["id"])
+                st.rerun()
+
 
 def render() -> None:
-    page_header("任务", "创建、验收、延期和调整。不要让任务无声地消失。")
-    _create_form()
+    page_header("计划", "用现实日期安排今天、明天或未来；过去的计划也始终可查。")
+    selected_date = _date_navigator()
 
-    recurring = list_recurring_tasks()
-    with st.expander(f"每天重复的任务 · {len(recurring)}"):
-        if not recurring:
-            st.caption("暂无每日任务。创建任务时勾选“每天重复”即可。")
-        for template in recurring:
-            col_name, col_action = st.columns([5, 1])
-            capacity_text = "计入容量" if template["counts_toward_capacity"] else "不计入容量"
-            col_name.markdown(
-                f"**{template['title']}**  \\n+{template['start_time'] or '未设时间'} · {template['estimated_minutes']} 分钟 · {capacity_text}"
-            )
-            if col_action.button("停止重复", key=f"stop_recurring_{template['id']}"):
-                stop_recurring_task(template["id"])
-                st.success("已停止未来生成，历史记录仍然保留。")
-                st.rerun()
+    tasks = list_tasks(selected_date.isoformat())
+    _create_form(selected_date, expanded=not tasks)
+    tasks = list_tasks(selected_date.isoformat())
 
-    col1, col2 = st.columns([1, 2])
-    selected_date = col1.date_input("查看日期", date.today(), key="task_filter_date")
-    status_filter = col2.selectbox("状态筛选", ["全部"] + TASK_STATUSES)
-    tasks = list_tasks(
-        selected_date.isoformat(), None if status_filter == "全部" else status_filter
-    )
+    st.markdown("### 当天计划")
+    _summary(tasks)
     capacity = assess_capacity(tasks)
     if capacity["overloaded"]:
-        st.warning(f"当天计划共 {capacity['total_minutes']} 分钟，已经超过建议可执行范围。")
+        st.warning(
+            f"当天仍需投入 {minutes_text(capacity['total_minutes'])}，已超过建议容量。"
+            "可以顺延低优先级计划，给执行留出余量。"
+        )
 
-    if not tasks:
-        st.info("这个日期暂无任务。")
-        return
-    selected_id = st.selectbox(
-        "选择任务进行编辑",
-        [task["id"] for task in tasks],
-        format_func=lambda task_id: next(task["title"] for task in tasks if task["id"] == task_id),
-    )
-    for task in tasks:
-        task_card(task)
-        cols = st.columns([1, 1, 1, 1, 3])
-        if task["status"] not in {"已完成", "已放弃"}:
-            if cols[0].button("现在完成", key=f"finish_{task['id']}"):
-                complete_task(task["id"])
-                st.rerun()
-            if cols[1].button("晚些时候", key=f"later_{task['id']}"):
-                update_task(task["id"], {"start_time": None, "end_time": None, "time_slot": "晚上"})
-                st.rerun()
-            if cols[2].button("移到明天", key=f"tomorrow_{task['id']}"):
-                count = postpone_task(task["id"], (date.today() + timedelta(days=1)).isoformat())
-                if count >= 3:
-                    st.warning("该任务已连续延期 3 次：请拆分、降级或放弃。")
-                st.rerun()
-            if cols[3].button("放弃", key=f"abandon_{task['id']}"):
-                abandon_task(task["id"])
-                st.rerun()
+    _task_list(tasks)
+    editing_task_id = st.session_state.get("planner_edit_task_id")
+    if editing_task_id:
+        _edit_panel(int(editing_task_id))
 
     st.divider()
-    st.subheader("修改任务")
-    _edit_form(selected_id)
-    with st.expander("删除任务（不可撤销）"):
-        confirm = st.checkbox("我确认删除当前选中的任务", key=f"confirm_delete_{selected_id}")
-        if st.button("删除", disabled=not confirm, key=f"delete_{selected_id}"):
-            delete_task(selected_id)
-            st.rerun()
+    _recurring_plans()
