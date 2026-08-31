@@ -29,29 +29,36 @@ def test_all_navigation_pages_render_without_exception() -> None:
     app = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
     assert not app.exception
 
+    assert any(item.label == "日期查询" for item in app.date_input)
+    assert any(button.label == "明日安排" for button in app.button)
+    next(button for button in app.button if button.label == "明日安排").click()
+    app.run()
+    selected_date = next(item for item in app.date_input if item.label == "日期查询")
+    assert selected_date.value == date.today() + timedelta(days=1)
+
+    next(item for item in app.text_input if item.label == "任务名称").set_value(
+        "明天的界面验收计划"
+    )
+    next(button for button in app.button if button.label == "加入明天计划").click()
+    app.run()
+    assert any(
+        task["title"] == "明天的界面验收计划"
+        for task in list_tasks(selected_date.value.isoformat(), db_path=DB_PATH)
+    )
+    assert not app.exception
+
+    selected_date = next(item for item in app.date_input if item.label == "日期查询")
+    selected_date.set_value(date.today() - timedelta(days=1))
+    app.run()
+    historical_date = next(item for item in app.date_input if item.label == "日期查询")
+    assert historical_date.value == date.today() - timedelta(days=1)
+    assert not app.exception
+
     navigation = next(item for item in app.radio if item.label == "导航")
-    for page in ["＋ 计划", "📅 日记", "🎯 方向", "📚 阅读", "⚙️ 设置", "📖 今天"]:
+    for page in ["📅 日记", "🎯 方向", "📚 阅读", "⚙️ 设置", "📖 今天"]:
         navigation.set_value(page)
         app.run()
         assert not app.exception, f"{page} 页面出现运行时异常"
-        if page == "＋ 计划":
-            assert any(item.label == "计划日期" for item in app.date_input)
-            assert any(button.label == "保存计划" for button in app.button)
-            next(button for button in app.button if button.label == "明天").click()
-            app.run()
-            planner_date = next(item for item in app.date_input if item.label == "计划日期")
-            assert planner_date.value == date.today() + timedelta(days=1)
-
-            next(item for item in app.text_input if item.label == "计划内容 *").set_value(
-                "明天的界面验收计划"
-            )
-            next(button for button in app.button if button.label == "保存计划").click()
-            app.run()
-            assert any(
-                task["title"] == "明天的界面验收计划"
-                for task in list_tasks(planner_date.value.isoformat(), db_path=DB_PATH)
-            )
-            assert not app.exception
         if page == "📅 日记":
             assert any(button.label == "编辑这一天" for button in app.button)
         navigation = next(item for item in app.radio if item.label == "导航")

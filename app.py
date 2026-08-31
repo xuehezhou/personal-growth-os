@@ -7,7 +7,7 @@ from datetime import date
 import streamlit as st
 
 from database import init_database
-from pages import books, goals, journal, settings, tasks, today
+from pages import books, goals, journal, settings, today
 from services.journal import create_quick_note
 from services.tasks import materialize_daily_tasks
 
@@ -118,7 +118,6 @@ materialize_daily_tasks()
 
 PAGES = {
     "📖 今天": today.render,
-    "＋ 计划": tasks.render,
     "📅 日记": journal.render,
     "🎯 方向": goals.render,
     "📚 阅读": books.render,

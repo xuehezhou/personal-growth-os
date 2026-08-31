@@ -24,12 +24,14 @@ from services.tasks import (
     create_task,
     delete_task,
     list_tasks,
+    materialize_daily_tasks,
     update_task,
 )
 
 
 MOODS = ["😀 很好", "🙂 不错", "😐 一般", "😴 有点累", "😞 不太好"]
 SLOTS = (("上午", "☀️"), ("下午", "🌤"), ("晚上", "🌙"), ("全天", "·"))
+WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
 
 def _time_value(value: str | None) -> time | None:
@@ -40,23 +42,77 @@ def _move_to_direction() -> None:
     st.session_state["main_navigation"] = "🎯 方向"
 
 
+def _day_label(day: date) -> str:
+    difference = (day - date.today()).days
+    if difference == -1:
+        return "昨天"
+    if difference == 0:
+        return "今天"
+    if difference == 1:
+        return "明天"
+    return f"{day:%m月%d日}"
+
+
+def _set_today_view_date(day: date) -> None:
+    st.session_state["today_view_date"] = day
+
+
+def _date_selector() -> date:
+    if "today_view_date" not in st.session_state:
+        st.session_state["today_view_date"] = date.today()
+
+    selected = st.session_state["today_view_date"]
+    today_column, tomorrow_column, picker_column = st.columns(
+        [1.15, 1.15, 3.2], vertical_alignment="bottom"
+    )
+    today_column.button(
+        "今日计划",
+        type="primary" if selected == date.today() else "secondary",
+        use_container_width=True,
+        on_click=_set_today_view_date,
+        args=(date.today(),),
+    )
+    tomorrow_column.button(
+        "明日安排",
+        type="primary" if selected == date.today() + timedelta(days=1) else "secondary",
+        use_container_width=True,
+        on_click=_set_today_view_date,
+        args=(date.today() + timedelta(days=1),),
+    )
+    selected = picker_column.date_input(
+        "日期查询",
+        key="today_view_date",
+        format="YYYY-MM-DD",
+        help="选择过去或未来的日期，查看并编辑那一天的完整安排。",
+    )
+    if selected != date.today():
+        relation = _day_label(selected)
+        st.caption(
+            f"正在查看 {relation} · {selected:%Y年%m月%d日} · {WEEKDAYS[selected.weekday()]}。"
+            "下面所有新增和保存都只写入这个日期。"
+        )
+    return selected
+
+
 def _header(day: date, journal: dict) -> None:
+    day_label = _day_label(day)
+    question = "今天想怎样度过？" if day == date.today() else f"{day_label}想怎样度过？"
     st.markdown(
         f"""
         <div class="day-hero">
-          <div class="day-name">{day:%A}</div>
+          <div class="day-name">{WEEKDAYS[day.weekday()]}</div>
           <div class="day-date">{day:%Y} · {day:%m} · {day:%d}</div>
-          <div class="day-question">今天想怎样度过？</div>
+          <div class="day-question">{question}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
     mood_index = MOODS.index(journal["mood"]) if journal["mood"] in MOODS else 2
     with st.form(f"day_intention_{day.isoformat()}"):
-        mood = st.radio("今日状态", MOODS, index=mood_index, horizontal=True)
+        mood = st.radio(f"{day_label}状态", MOODS, index=mood_index, horizontal=True)
         st.markdown("### Today’s Focus")
         focus = st.text_input(
-            "今天如果只能完成一件事情，我希望完成什么？",
+            f"{day_label}如果只能完成一件事情，我希望完成什么？",
             value=journal["focus"],
             placeholder="只写一件。",
         )
@@ -71,7 +127,7 @@ def _header(day: date, journal: dict) -> None:
             value=journal["secondary_focus_2"],
             placeholder="留空也很好",
         )
-        submitted = st.form_submit_button("保存今天的开始", type="primary")
+        submitted = st.form_submit_button(f"保存{day_label}的开始", type="primary")
     if submitted:
         save_journal(
             day,
@@ -82,7 +138,7 @@ def _header(day: date, journal: dict) -> None:
                 "secondary_focus_2": third,
             },
         )
-        st.success("今天的状态与重点已保存")
+        st.success(f"{day_label}的状态与重点已保存")
         st.rerun()
 
 
@@ -111,14 +167,15 @@ def _direction_card() -> None:
 
 
 def _quick_task_form(day: date) -> None:
-    with st.expander("＋ 今天突然要做的事", expanded=False):
+    day_label = _day_label(day)
+    with st.expander(f"＋ 添加{day_label}计划", expanded=False):
         with st.form(f"quick_task_{day.isoformat()}", clear_on_submit=True):
             title = st.text_input("任务名称", placeholder="例如：下午修项目 Bug")
             left, right = st.columns(2)
             start = left.time_input("时间（可选）", value=None)
             slot = right.selectbox("时间段", ["上午", "下午", "晚上", "全天"])
             notes = st.text_area("备注（可选）", height=80)
-            added = st.form_submit_button("加入今天计划", type="primary")
+            added = st.form_submit_button(f"加入{day_label}计划", type="primary")
         if added:
             try:
                 create_task(
@@ -135,7 +192,7 @@ def _quick_task_form(day: date) -> None:
                         "source": "user",
                     }
                 )
-                st.success("已加入今天计划")
+                st.success(f"已加入{day_label}计划")
                 st.rerun()
             except ValueError as error:
                 st.error(str(error))
@@ -176,8 +233,9 @@ def _task_editor(task: dict) -> None:
 
 
 def _timeline(day: date) -> None:
+    day_label = _day_label(day)
     st.markdown('<div class="section-space"></div>', unsafe_allow_html=True)
-    st.markdown("## 今天的时间安排")
+    st.markdown(f"## {day_label}的时间安排")
     _quick_task_form(day)
     tasks = list_tasks(day.isoformat())
     for slot, icon in SLOTS:
@@ -203,7 +261,7 @@ def _timeline(day: date) -> None:
     total = len(tasks)
     completed = sum(task["status"] == "已完成" for task in tasks)
     rate = round(completed / total * 100) if total else 0
-    st.caption(f"今日 {total} 项 · 已完成 {completed} 项 · {rate}%")
+    st.caption(f"{day_label} {total} 项 · 已完成 {completed} 项 · {rate}%")
     st.progress(rate)
 
 
@@ -422,7 +480,9 @@ def _sleep_message(day: date) -> None:
 
 
 def render(selected_date: date | None = None, embedded: bool = False) -> None:
-    day = selected_date or date.today()
+    day = selected_date or (_date_selector() if not embedded else date.today())
+    if day >= date.today():
+        materialize_daily_tasks(day.isoformat())
     journal = get_journal(day)
     if embedded:
         st.info(f"正在编辑 {day:%Y年%m月%d日}。保存只会更新这一天。")
